@@ -36,6 +36,7 @@ jobs:
           TIMEOUT_TCP = 5
           TIMEOUT_HTTP = 8
           MAX_DELAY_MS = 1000
+          ALLOWED_STATUS_CODES = {200, 204, 301, 302}
 
           def fetch_source(url):
               try:
@@ -120,46 +121,68 @@ jobs:
               except Exception:
                   return None
 
-          async def url_test(host, port):
+          def parse_status_code(data):
               try:
-                  start = time.time()
-                  if port == 443 or port == 8443:
-                      ctx = ssl.create_default_context()
-                      ctx.check_hostname = False
-                      ctx.verify_mode = ssl.CERT_NONE
-                      reader, writer = await asyncio.wait_for(
-                          asyncio.open_connection(host, port, ssl=ctx), timeout=TIMEOUT_HTTP
-                      )
-                      writer.write(b"GET / HTTP/1.1\r\nHost: " + host.encode() + b"\r\nConnection: close\r\n\r\n")
-                      await writer.drain()
-                      await asyncio.wait_for(reader.read(1), timeout=TIMEOUT_HTTP)
-                  else:
-                      reader, writer = await asyncio.wait_for(
-                          asyncio.open_connection(host, 80), timeout=TIMEOUT_HTTP
-                      )
-                      writer.write(b"GET / HTTP/1.1\r\nHost: " + host.encode() + b"\r\nConnection: close\r\n\r\n")
-                      await writer.drain()
-                      await asyncio.wait_for(reader.read(1), timeout=TIMEOUT_HTTP)
-                  writer.close()
-                  await writer.wait_closed()
-                  return int((time.time() - start) * 1000)
+                  first_line = data.split(b"\r\n")[0].decode("utf-8", errors="ignore")
+                  parts = first_line.split()
+                  if len(parts) >= 2:
+                      return int(parts[1])
               except Exception:
+                  pass
+              return None
+
+          async def url_test(host, port):
+              async def _try_connect(test_host, test_port, use_ssl=False):
                   try:
                       start = time.time()
-                      ctx = ssl.create_default_context()
-                      ctx.check_hostname = False
-                      ctx.verify_mode = ssl.CERT_NONE
-                      reader, writer = await asyncio.wait_for(
-                          asyncio.open_connection(host, 443, ssl=ctx), timeout=TIMEOUT_HTTP
+                      if use_ssl:
+                          ctx = ssl.create_default_context()
+                          ctx.check_hostname = False
+                          ctx.verify_mode = ssl.CERT_NONE
+                          reader, writer = await asyncio.wait_for(
+                              asyncio.open_connection(test_host, test_port, ssl=ctx), timeout=TIMEOUT_HTTP
+                          )
+                      else:
+                          reader, writer = await asyncio.wait_for(
+                              asyncio.open_connection(test_host, test_port), timeout=TIMEOUT_HTTP
+                          )
+                      request = (
+                          b"GET /generate_204 HTTP/1.1\r\n"
+                          + b"Host: " + test_host.encode() + b"\r\n"
+                          + b"User-Agent: Mozilla/5.0\r\n"
+                          + b"Connection: close\r\n\r\n"
                       )
-                      writer.write(b"GET / HTTP/1.1\r\nHost: " + host.encode() + b"\r\nConnection: close\r\n\r\n")
+                      writer.write(request)
                       await writer.drain()
-                      await asyncio.wait_for(reader.read(1), timeout=TIMEOUT_HTTP)
+                      data = await asyncio.wait_for(reader.read(1024), timeout=TIMEOUT_HTTP)
                       writer.close()
                       await writer.wait_closed()
+                      if not data:
+                          return None
+                      status_code = parse_status_code(data)
+                      if status_code is None:
+                          return None
+                      if status_code not in ALLOWED_STATUS_CODES:
+                          print(f"[STATUS REJECT] {test_host}:{test_port} -> {status_code}")
+                          return None
                       return int((time.time() - start) * 1000)
                   except Exception:
                       return None
+
+              if port == 443 or port == 8443:
+                  delay = await _try_connect(host, port, use_ssl=True)
+                  if delay is not None:
+                      return delay
+              else:
+                  delay = await _try_connect(host, port, use_ssl=False)
+                  if delay is not None:
+                      return delay
+                  delay = await _try_connect(host, port, use_ssl=True)
+                  if delay is not None:
+                      return delay
+
+              delay = await _try_connect(host, 443, use_ssl=True)
+              return delay
 
           async def process_node(node, semaphore):
               async with semaphore:
