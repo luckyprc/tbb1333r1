@@ -36,7 +36,6 @@ jobs:
           TIMEOUT_TCP = 5
           TIMEOUT_HTTP = 8
           MAX_DELAY_MS = 1000
-          ALLOWED_STATUS_CODES = {200, 204, 301, 302}
 
           def fetch_source(url):
               try:
@@ -162,8 +161,9 @@ jobs:
                       status_code = parse_status_code(data)
                       if status_code is None:
                           return None
-                      if status_code not in ALLOWED_STATUS_CODES:
-                          print(f"[STATUS REJECT] {test_host}:{test_port} -> {status_code}")
+                      # 放宽：只要收到有效的HTTP响应（任何状态码100-599）即保留
+                      if not (100 <= status_code <= 599):
+                          print(f"[STATUS INVALID] {test_host}:{test_port} -> {status_code}")
                           return None
                       return int((time.time() - start) * 1000)
                   except Exception:
