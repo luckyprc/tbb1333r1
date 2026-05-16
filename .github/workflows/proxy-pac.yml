@@ -126,15 +126,15 @@ jobs:
           printf '%s' 'ZWRpcnMoIm91dHB1dCIsIGV4aXN0X29rPVRydWUpCndpdGggb3Blbigib3V0cHV0L3Byb3h5LnBhYyIsICJ3IiwgZW5jb2Rpbmc9' >> /tmp/v.b64
           printf '%s' 'InV0Zi04IikgYXMgZjoKICAgIGYud3JpdGUocGFjX2NvbnRlbnQpCgp3aXRoIG9wZW4oIm91dHB1dC9wcm94eV9saXN0LnR4dCIs' >> /tmp/v.b64
           printf '%s' 'ICJ3IiwgZW5jb2Rpbmc9InV0Zi04IikgYXMgZjoKICAgIGYud3JpdGUoZiIjIEdlbmVyYXRlZDoge3RpbWUuc3RyZnRpbWUoJyVZ' >> /tmp/v.b64
-          printf '%s' 'LSVtLSVkICVIOiVNOiVTJyl9CiIpCiAgICBmLndyaXRlKGYiIyBUZXN0IFVSTDoge1RFU1RfVVJMfQoiKQogICAgZi53cml0ZShm' >> /tmp/v.b64
-          printf '%s' 'IiMgQ3JpdGVyaWE6IFRDUDx7VENQX1RJTUVPVVR9cywgSFRUUDx7SFRUUF9USU1FT1VUfXMsIExhdGVuY3k8e01BWF9MQVRFTkNZ' >> /tmp/v.b64
-          printf '%s' 'X01TfW1zLCBTdGF0dXMgaW4ge1ZBTElEX1NUQVRVU30KIikKICAgIGYud3JpdGUoIi0iICogNTAgKyAiCiIpCiAgICBmb3IgaXRl' >> /tmp/v.b64
-          printf '%s' 'bSBpbiBzZWxlY3RlZDoKICAgICAgICBmLndyaXRlKGYie2l0ZW1bJ3VybCddfSB8IHtpdGVtWydsYXRlbmN5J119bXMgfCBIVFRQ' >> /tmp/v.b64
-          printf '%s' 'IHtpdGVtWydzdGF0dXMnXX0KIikKCnN1bW1hcnkgPSBmIkZldGNoZWQge2xlbihjYW5kaWRhdGVzKX0sIEFsaXZlIHtsZW4oYWxp' >> /tmp/v.b64
-          printf '%s' 'dmUpfSwgU2VsZWN0ZWQge2xlbihzZWxlY3RlZCl9IgpnaF9vdXQgPSBvcy5lbnZpcm9uLmdldCgnR0lUSFVCX09VVFBVVCcsICcv' >> /tmp/v.b64
-          printf '%s' 'ZGV2L251bGwnKQp3aXRoIG9wZW4oZ2hfb3V0LCAnYScpIGFzIGZoOgogICAgcHJpbnQoZiJzdW1tYXJ5PXtzdW1tYXJ5fSIsIGZp' >> /tmp/v.b64
-          printf '%s' 'bGU9ZmgpCgpwcmludChmIls0LzRdIHtzdW1tYXJ5fSIpCnByaW50KCIgICAgICBGaWxlcyB3cml0dGVuOiBvdXRwdXQvcHJveHku' >> /tmp/v.b64
-          printf '%s' 'cGFjICwgb3V0cHV0L3Byb3h5X2xpc3QudHh0IikKcHJpbnQoIj0iICogNjApCg==' >> /tmp/v.b64
+          printf '%s' 'LSVtLSVkICVIOiVNOiVTJyl9XG4iKQogICAgZi53cml0ZShmIiMgVGVzdCBVUkw6IHtURVNUX1VSTH1cbiIpCiAgICBmLndyaXRl' >> /tmp/v.b64
+          printf '%s' 'KGYiIyBDcml0ZXJpYTogVENQPHtUQ1BfVElNRU9VVH1zLCBIVFRQPHtIVFRQX1RJTUVPVVR9cywgTGF0ZW5jeTx7TUFYX0xBVEVO' >> /tmp/v.b64
+          printf '%s' 'Q1lfTVN9bXMsIFN0YXR1cyBpbiB7VkFMSURfU1RBVFVTfVxuIikKICAgIGYud3JpdGUoIi0iICogNTAgKyAiXG4iKQogICAgZm9y' >> /tmp/v.b64
+          printf '%s' 'IGl0ZW0gaW4gc2VsZWN0ZWQ6CiAgICAgICAgZi53cml0ZShmIntpdGVtWyd1cmwnXX0gfCB7aXRlbVsnbGF0ZW5jeSddfW1zIHwg' >> /tmp/v.b64
+          printf '%s' 'SFRUUCB7aXRlbVsnc3RhdHVzJ119XG4iKQoKc3VtbWFyeSA9IGYiRmV0Y2hlZCB7bGVuKGNhbmRpZGF0ZXMpfSwgQWxpdmUge2xl' >> /tmp/v.b64
+          printf '%s' 'bihhbGl2ZSl9LCBTZWxlY3RlZCB7bGVuKHNlbGVjdGVkKX0iCmdoX291dCA9IG9zLmVudmlyb24uZ2V0KCdHSVRIVUJfT1VUUFVU' >> /tmp/v.b64
+          printf '%s' 'JywgJy9kZXYvbnVsbCcpCndpdGggb3BlbihnaF9vdXQsICdhJykgYXMgZmg6CiAgICBwcmludChmInN1bW1hcnk9e3N1bW1hcnl9' >> /tmp/v.b64
+          printf '%s' 'IiwgZmlsZT1maCkKCnByaW50KGYiWzQvNF0ge3N1bW1hcnl9IikKcHJpbnQoIiAgICAgIEZpbGVzIHdyaXR0ZW46IG91dHB1dC9w' >> /tmp/v.b64
+          printf '%s' 'cm94eS5wYWMgLCBvdXRwdXQvcHJveHlfbGlzdC50eHQiKQpwcmludCgiPSIgKiA2MCkK' >> /tmp/v.b64
           base64 -d /tmp/v.b64 > /tmp/validate_proxies.py
           python3 /tmp/validate_proxies.py
 
