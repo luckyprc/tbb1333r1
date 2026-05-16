@@ -70,20 +70,22 @@ jobs:
           SOURCES = [
               # 中国专属 HTTP 代理（优先）
               "https://raw.githubusercontent.com/saisuiu/Lionkings-Http-Proxys-Proxies/main/cnfree.txt",
-              # 亚洲 SOCKS5（ProxyGenerator 已验证 Google）
-              "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/ForSites/google/socks5.txt",
+              # ProxyGenerator 精英级 SOCKS5
               "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/MostStable/socks5.txt",
+              # ProxyGenerator 稳定级 SOCKS5
               "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/Stable/socks5.txt",
-              # 亚洲 HTTP（ProxyGenerator 已验证 Google）
-              "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/ForSites/google/http.txt",
-              # 全球 SOCKS5（作为补充）
+              # ProxyGenerator 精英级 HTTP
+              "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/MostStable/http.txt",
+              # ProxyGenerator 稳定级 HTTP
+              "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/Stable/http.txt",
+              # 全球 SOCKS5 补充
               "https://raw.githubusercontent.com/Thordata/awesome-free-proxy-list/main/proxies/socks5.txt",
               "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
           ]
 
           def fetch_sources():
               raw = []
-              for url in SOURCES:
+n              for url in SOURCES:
                   try:
                       r = requests.get(url, timeout=20)
                       if r.status_code != 200:
@@ -154,7 +156,7 @@ jobs:
               """用 ip-api.com/batch 查询 IP 地理位置，只保留亚洲代理"""
               if not proxy_urls:
                   return []
-              # 提取唯一 IP
+              # 提取唯一 IP，过滤 hostname 为 None 的
               ip_map = {}
               for p in proxy_urls:
                   h = urlparse(p).hostname
@@ -170,7 +172,6 @@ jobs:
                   batch = ips[i:i+batch_size]
                   payload = [{"query": ip, "fields": "countryCode"} for ip in batch]
                   try:
-                      # ip-api 免费版限制 45 req/min，batch 每批算 1 个请求
                       r = requests.post(
                           "http://ip-api.com/batch?fields=countryCode",
                           json=payload,
@@ -179,8 +180,10 @@ jobs:
                       if r.status_code == 200:
                           for item in r.json():
                               cc = item.get("countryCode", "")
-                              if cc in ASIA_CODES:
-                                  asia_ips.add(item.get("query"))
+                              query_ip = item.get("query")
+                              # 防御：query_ip 为 None 时跳过
+                              if query_ip and cc in ASIA_CODES:
+                                  asia_ips.add(query_ip)
                       else:
                           print("[GEO_WARN] batch HTTP {}".format(r.status_code))
                   except Exception as e:
@@ -191,7 +194,8 @@ jobs:
 
               result = []
               for ip in asia_ips:
-                  result.extend(ip_map[ip])
+                  if ip in ip_map:
+                      result.extend(ip_map[ip])
               print("[GEO] Asia IPs kept: {} / {}".format(len(result), len(proxy_urls)))
               return result
 
@@ -279,7 +283,7 @@ jobs:
 
           proxy_chain = "; ".join(proxy_directives) + "; DIRECT" if proxy_directives else "DIRECT"
 
-          pac_content = '''function FindProxyForURL(url, host) {
+          pac_content = \'\'\'function FindProxyForURL(url, host) {
               if (shExpMatch(host, "*.cn") ||
                   shExpMatch(host, "*.com.cn") ||
                   shExpMatch(host, "*.gov.cn") ||
@@ -291,20 +295,20 @@ jobs:
                   isPlainHostName(host)) {
                   return "DIRECT";
               }
-              return "''' + proxy_chain + '''";
-          }'''
+              return "\'\'\' + proxy_chain + \'\'\'";
+          }\'\'\'
 
           os.makedirs("output", exist_ok=True)
           with open("output/proxy.pac", "w", encoding="utf-8") as f:
               f.write(pac_content)
 
           with open("output/proxy_list.txt", "w", encoding="utf-8") as f:
-              f.write("# Generated: {}\n".format(time.strftime("%Y-%m-%d %H:%M:%S")))
-              f.write("# Test URL: {}\n".format(TEST_URL))
-              f.write("# Criteria: TCP<<{}s, HTTP<<{}s, Latency<<{}ms, Asia only\n".format(TCP_TIMEOUT, HTTP_TIMEOUT, MAX_LATENCY_MS))
-              f.write("-" * 50 + "\n")
+              f.write("# Generated: {}\\n".format(time.strftime("%Y-%m-%d %H:%M:%S")))
+              f.write("# Test URL: {}\\n".format(TEST_URL))
+              f.write("# Criteria: TCP<<{}s, HTTP<<{}s, Latency<<{}ms, Asia only\\n".format(TCP_TIMEOUT, HTTP_TIMEOUT, MAX_LATENCY_MS))
+              f.write("-" * 50 + "\\n")
               for item in selected:
-                  f.write("{} | {}ms | HTTP {}\n".format(item["url"], item["latency"], item["status"]))
+                  f.write("{} | {}ms | HTTP {}\\n".format(item["url"], item["latency"], item["status"]))
 
           summary = "Fetched {}, TCP {}, Asia {}, Alive {}, Selected {}".format(
               len(candidates), len(tcp_alive), len(asia_proxies), len(alive), len(selected)
