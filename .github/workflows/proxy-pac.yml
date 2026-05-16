@@ -29,9 +29,12 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      # ... 后面和你现在的完全一样，不用改
 
       - name: Setup Python
         uses: actions/setup-python@v5
