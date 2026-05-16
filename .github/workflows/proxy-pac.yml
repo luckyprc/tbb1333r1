@@ -34,7 +34,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      # ... 后面和你现在的完全一样，不用改
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -53,18 +52,31 @@ jobs:
           from concurrent.futures import ThreadPoolExecutor, as_completed
 
           TEST_URL = "http://connectivitycheck.platform.hicloud.com/generate_204"
-          TCP_TIMEOUT = 3
-          HTTP_TIMEOUT = 8
-          MAX_LATENCY_MS = 5000
+          TCP_TIMEOUT = 2
+          HTTP_TIMEOUT = 5
+          MAX_LATENCY_MS = 1000
           VALID_STATUS = {200, 204, 301, 302}
           MAX_WORKERS = 80
-          TOP_N = 30
+          TOP_N = 20
+
+          # 亚洲国家代码（ISO 3166-1 alpha-2）
+          ASIA_CODES = {
+              "CN", "JP", "KR", "SG", "HK", "TW", "TH", "VN", "MY", "ID",
+              "PH", "IN", "KH", "LA", "MM", "MN", "PK", "BD", "NP", "LK",
+              "AE", "SA", "QA", "KW", "OM", "BH", "IL", "TR", "IR", "UZ",
+              "KZ", "KG", "TJ", "TM", "AZ", "AM", "GE"
+          }
 
           SOURCES = [
+              # 中国专属 HTTP 代理（优先）
+              "https://raw.githubusercontent.com/saisuiu/Lionkings-Http-Proxys-Proxies/main/cnfree.txt",
+              # 亚洲 SOCKS5（ProxyGenerator 已验证 Google）
               "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/ForSites/google/socks5.txt",
               "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/MostStable/socks5.txt",
               "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/Stable/socks5.txt",
+              # 亚洲 HTTP（ProxyGenerator 已验证 Google）
               "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/ForSites/google/http.txt",
+              # 全球 SOCKS5（作为补充）
               "https://raw.githubusercontent.com/Thordata/awesome-free-proxy-list/main/proxies/socks5.txt",
               "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
           ]
@@ -138,6 +150,51 @@ jobs:
               except Exception:
                   return False, 99999
 
+          def geo_check_batch(proxy_urls):
+              """用 ip-api.com/batch 查询 IP 地理位置，只保留亚洲代理"""
+              if not proxy_urls:
+                  return []
+              # 提取唯一 IP
+              ip_map = {}
+              for p in proxy_urls:
+                  h = urlparse(p).hostname
+                  if h:
+                      ip_map[h] = ip_map.get(h, []) + [p]
+
+              ips = list(ip_map.keys())
+              asia_ips = set()
+              batch_size = 100
+
+              print("[GEO] Querying {} unique IPs via ip-api.com...".format(len(ips)))
+              for i in range(0, len(ips), batch_size):
+                  batch = ips[i:i+batch_size]
+                  payload = [{"query": ip, "fields": "countryCode"} for ip in batch]
+                  try:
+                      # ip-api 免费版限制 45 req/min，batch 每批算 1 个请求
+                      r = requests.post(
+                          "http://ip-api.com/batch?fields=countryCode",
+                          json=payload,
+                          timeout=30
+                      )
+                      if r.status_code == 200:
+                          for item in r.json():
+                              cc = item.get("countryCode", "")
+                              if cc in ASIA_CODES:
+                                  asia_ips.add(item.get("query"))
+                      else:
+                          print("[GEO_WARN] batch HTTP {}".format(r.status_code))
+                  except Exception as e:
+                      print("[GEO_ERR] {}".format(e))
+                  # 避免触发 45 req/min 限制：每批间隔 2 秒
+                  if i + batch_size < len(ips):
+                      time.sleep(2)
+
+              result = []
+              for ip in asia_ips:
+                  result.extend(ip_map[ip])
+              print("[GEO] Asia IPs kept: {} / {}".format(len(result), len(proxy_urls)))
+              return result
+
           def proxy_check(proxy_url):
               try:
                   proxies = {"http": proxy_url, "https": proxy_url}
@@ -171,15 +228,29 @@ jobs:
               return None
 
           print("=" * 60)
-          print("[1/4] Fetching proxy sources...")
+          print("[1/5] Fetching proxy sources...")
           candidates = fetch_sources()
           print("      Total unique proxies fetched: {}".format(len(candidates)))
 
-          print("[2/4] Validating proxies (TCP + HTTP)...")
+          print("[2/5] TCP connectivity check...")
+          tcp_alive = []
+          with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+              futures = {ex.submit(tcp_check, urlparse(p).hostname, urlparse(p).port): p for p in candidates}
+              for future in as_completed(futures):
+                  p = futures[future]
+                  ok, lat = future.result()
+                  if ok:
+                      tcp_alive.append(p)
+          print("      TCP passed: {} / {}".format(len(tcp_alive), len(candidates)))
+
+          print("[3/5] Geo-filtering to Asia only...")
+          asia_proxies = geo_check_batch(tcp_alive)
+
+          print("[4/5] Validating Asia proxies (HTTP)...")
           alive = []
           dead = 0
           with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-              futures = {ex.submit(validate_one, p): p for p in candidates}
+              futures = {ex.submit(validate_one, p): p for p in asia_proxies}
               for future in as_completed(futures):
                   res = future.result()
                   if res:
@@ -188,7 +259,7 @@ jobs:
                   else:
                       dead += 1
 
-          print("[3/4] Validation complete: {} alive / {} dead".format(len(alive), dead))
+          print("[5/5] Validation complete: {} alive / {} dead".format(len(alive), dead))
 
           alive.sort(key=lambda x: x["latency"])
           selected = alive[:TOP_N]
@@ -230,17 +301,19 @@ jobs:
           with open("output/proxy_list.txt", "w", encoding="utf-8") as f:
               f.write("# Generated: {}\n".format(time.strftime("%Y-%m-%d %H:%M:%S")))
               f.write("# Test URL: {}\n".format(TEST_URL))
-              f.write("# Criteria: TCP<<{}s, HTTP<<{}s, Latency<<{}ms, Status in {}\n".format(TCP_TIMEOUT, HTTP_TIMEOUT, MAX_LATENCY_MS, VALID_STATUS))
+              f.write("# Criteria: TCP<<{}s, HTTP<<{}s, Latency<<{}ms, Asia only\n".format(TCP_TIMEOUT, HTTP_TIMEOUT, MAX_LATENCY_MS))
               f.write("-" * 50 + "\n")
               for item in selected:
                   f.write("{} | {}ms | HTTP {}\n".format(item["url"], item["latency"], item["status"]))
 
-          summary = "Fetched {}, Alive {}, Selected {}".format(len(candidates), len(alive), len(selected))
+          summary = "Fetched {}, TCP {}, Asia {}, Alive {}, Selected {}".format(
+              len(candidates), len(tcp_alive), len(asia_proxies), len(alive), len(selected)
+          )
           gh_out = os.environ.get("GITHUB_OUTPUT", "/dev/null")
           with open(gh_out, "a") as fh:
               print("summary={}".format(summary), file=fh)
 
-          print("[4/4] {}".format(summary))
+          print("[DONE] {}".format(summary))
           print("      Files written: output/proxy.pac , output/proxy_list.txt")
           print("=" * 60)
           PYEOF
