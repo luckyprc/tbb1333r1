@@ -1,4 +1,4 @@
-name: Proxy Pool & PAC Generator (HTTP Only - Fixed)
+name: Proxy Pool & PAC Generator (HTTP Only - Real Proxy Verify)
 
 on:
   schedule:
@@ -60,11 +60,12 @@ jobs:
           from urllib.parse import urlparse
           from concurrent.futures import ThreadPoolExecutor, as_completed
 
-          TEST_URL = "http://connectivitycheck.platform.hicloud.com/generate_204"
+          # ========== 配置 ==========
+          TEST_URL = "http://httpbin.org/ip"
           TCP_TIMEOUT = 2
-          HTTP_TIMEOUT = 6
+          HTTP_TIMEOUT = 8
           FETCH_TIMEOUT = 10
-          MAX_LATENCY_MS = 3000
+          MAX_LATENCY_MS = 5000
           MAX_WORKERS = 30
           TOP_N = 10
           GEO_MIN_COUNT = 3
@@ -74,6 +75,7 @@ jobs:
 
           TARGET_CODES = {"JP", "KR", "SG", "MY", "HK", "TW", "TH", "VN", "ID", "PH"}
 
+          # ========== 仅 HTTP 代理源 ==========
           SOURCES = [
               ("https://raw.githubusercontent.com/saisuiu/Lionkings-Http-Proxys-Proxies/main/cnfree.txt", "http", False),
               ("https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/MostStable/http.txt", "http", False),
@@ -119,7 +121,6 @@ jobs:
                   return False
 
           def parse_proxy_url(proxy_str):
-              """安全解析代理URL，返回(host, port)或None"""
               try:
                   parsed = urlparse(proxy_str)
                   host = parsed.hostname
@@ -229,18 +230,32 @@ jobs:
                   return False, 99999
 
           def http_check(proxy_url):
+              """真代理验证：通过 httpbin.org/ip 确认请求被转发，且出口IP与代理IP不同"""
               try:
                   proxies = {"http": proxy_url, "https": proxy_url}
                   t0 = time.time()
-                  r = requests.get(TEST_URL, proxies=proxies, timeout=HTTP_TIMEOUT, allow_redirects=False)
+                  r = requests.get(TEST_URL, proxies=proxies, timeout=HTTP_TIMEOUT)
                   lat = (time.time() - t0) * 1000
+
+                  if r.status_code == 200 and "origin" in r.text:
+                      try:
+                          data = r.json()
+                          returned_ip = data.get("origin", "").split(",")[0].strip()
+                          proxy_ip = urlparse(proxy_url).hostname
+
+                          # 确认返回的IP和代理IP不同（说明真的转发了）
+                          if returned_ip and proxy_ip != returned_ip and lat <= MAX_LATENCY_MS:
+                              return True, round(lat, 2), 200, returned_ip
+                      except Exception:
+                          pass
+
+                  # 407 = 需要认证，不可用
                   if r.status_code == 407:
-                      return False, lat, 407
-                  if lat <= MAX_LATENCY_MS:
-                      return True, lat, r.status_code
-                  return False, lat, r.status_code
+                      return False, lat, 407, None
+
+                  return False, lat, r.status_code, None
               except Exception as e:
-                  return False, 99999, str(e)
+                  return False, 99999, str(e)[:30], None
 
           def validate_one(proxy_url):
               parsed = parse_proxy_url(proxy_url)
@@ -252,15 +267,16 @@ jobs:
               if not ok:
                   return None
 
-              ok, lat, status = http_check(proxy_url)
+              ok, lat, status, exit_ip = http_check(proxy_url)
               if ok:
                   return {
                       "url": proxy_url,
                       "scheme": "http",
                       "host": host,
                       "port": port,
-                      "latency": round(lat, 2),
-                      "status": status
+                      "latency": lat,
+                      "status": status,
+                      "exit_ip": exit_ip
                   }
               return None
 
@@ -307,9 +323,10 @@ jobs:
               ))
               return result
 
+          # ========== 主流程 ==========
           log("=" * 60)
-          log("[Config] HTTP Only | Geo filter: {} | Target: {} | Min: {}".format(
-              ENABLE_GEO_FILTER, ", ".join(sorted(TARGET_CODES)), GEO_MIN_COUNT
+          log("[Config] HTTP Only | Real proxy verify | Geo filter: {} | Target: {}".format(
+              ENABLE_GEO_FILTER, ", ".join(sorted(TARGET_CODES))
           ))
           log("=" * 60)
 
@@ -318,7 +335,7 @@ jobs:
           candidates = fetch_sources()
           log("[1/4] Done in {:.1f}s".format(time.time() - t_start))
 
-          # 过滤无效端口后再进入TCP阶段
+          # 过滤无效端口
           valid_candidates = []
           invalid_count = 0
           for p in candidates:
@@ -372,7 +389,7 @@ jobs:
               validate_pool = tcp_alive
               log("[3/4] Validate pool: {}".format(len(validate_pool)))
 
-          log("[4/4] Validating HTTP proxies...")
+          log("[4/4] Validating real HTTP proxies (httpbin.org/ip)...")
           t_start = time.time()
           alive = []
           dead = 0
@@ -385,7 +402,9 @@ jobs:
                   if res:
                       alive.append(res)
                       if len(alive) <= 5:
-                          log("[4/4] ALIVE {} | {}ms | HTTP {}".format(res["url"], res["latency"], res["status"]))
+                          log("[4/4] ALIVE {} | {}ms | ExitIP: {}".format(
+                              res["url"], res["latency"], res["exit_ip"]
+                          ))
                   else:
                       dead += 1
                   if checked % 500 == 0:
@@ -394,7 +413,7 @@ jobs:
 
           alive.sort(key=lambda x: x["latency"])
           selected = alive[:TOP_N]
-          log("Selected top {} HTTP proxies by latency".format(len(selected)))
+          log("Selected top {} real HTTP proxies by latency".format(len(selected)))
 
           proxy_directives = []
           for item in selected:
@@ -469,7 +488,7 @@ jobs:
 
           with open("output/proxy_list.txt", "w", encoding="utf-8") as f:
               f.write("# Generated: {}\n".format(time.strftime("%Y-%m-%d %H:%M:%S")))
-              f.write("# Mode: HTTP ONLY | Test URL: {}\n".format(TEST_URL))
+              f.write("# Mode: HTTP ONLY (Real Proxy Verify) | Test URL: {}\n".format(TEST_URL))
               f.write("# Target Regions: {}\n".format(", ".join(sorted(TARGET_CODES))))
               f.write("# Geo Filter: {} | TCP<{}s | HTTP<{}s | Latency<{}ms\n".format(
                   ENABLE_GEO_FILTER, TCP_TIMEOUT, HTTP_TIMEOUT, MAX_LATENCY_MS
@@ -477,7 +496,9 @@ jobs:
               f.write("-" * 60 + "\n")
               if selected:
                   for item in selected:
-                      f.write("{} | {}ms | HTTP {}\n".format(item["url"], item["latency"], item["status"]))
+                      f.write("{} | {}ms | HTTP {} | ExitIP: {}\n".format(
+                          item["url"], item["latency"], item["status"], item["exit_ip"]
+                      ))
               else:
                   f.write("# WARNING: No usable HTTP proxies found.\n")
 
@@ -499,7 +520,8 @@ jobs:
           status_text = "OK" if selected else "NO PROXY"
           html_parts.append('<p class="{}">Status: {}</p>'.format(status_class, status_text))
           html_parts.append('<p>Generated: {}</p>'.format(time.strftime("%Y-%m-%d %H:%M:%S")))
-          html_parts.append('<p>Mode: <b>HTTP ONLY</b> | Target Regions: <b>{}</b></p>'.format(
+          html_parts.append('<p>Mode: <b>HTTP ONLY (Real Proxy Verify)</b></p>')
+          html_parts.append('<p>Target Regions: <b>{}</b></p>'.format(
               ", ".join(sorted(TARGET_CODES))
           ))
           html_parts.append('<p>Fetched: {} | TCP: {} | Alive: {} | Selected: {}</p>'.format(
@@ -510,15 +532,15 @@ jobs:
               '<code>https://luckyprc.github.io/tbb1333r1/proxy.pac</code>',
               '<h2>Selected Proxies</h2>',
               '<table>',
-              '<tr><th>Proxy</th><th>Latency</th><th>Status</th></tr>',
+              '<tr><th>Proxy</th><th>Latency</th><th>Status</th><th>Exit IP</th></tr>',
           ])
           if selected:
               for s in selected:
-                  html_parts.append('<tr><td>{}</td><td>{}ms</td><td>HTTP {}</td></tr>'.format(
-                      s["url"], s["latency"], s["status"]
+                  html_parts.append('<tr><td>{}</td><td>{}ms</td><td>HTTP {}</td><td>{}</td></tr>'.format(
+                      s["url"], s["latency"], s["status"], s["exit_ip"]
                   ))
           else:
-              html_parts.append('<tr><td colspan=3>No HTTP proxies</td></tr>')
+              html_parts.append('<tr><td colspan=4>No HTTP proxies</td></tr>')
           html_parts.extend([
               '</table>',
               '<h2>Raw List</h2>',
@@ -526,7 +548,9 @@ jobs:
           ])
           if selected:
               for s in selected:
-                  html_parts.append('{} | {}ms | HTTP {}'.format(s["url"], s["latency"], s["status"]))
+                  html_parts.append('{} | {}ms | HTTP {} | ExitIP: {}'.format(
+                      s["url"], s["latency"], s["status"], s["exit_ip"]
+                  ))
           else:
               html_parts.append('No usable HTTP proxies')
           html_parts.extend([
