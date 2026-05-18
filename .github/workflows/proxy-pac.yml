@@ -1,4 +1,4 @@
-name: Proxy Pool & PAC Generator
+name: Proxy Pool & PAC Generator (JP/KR/SG/MY/HK Only)
 
 on:
   schedule:
@@ -18,9 +18,9 @@ on:
   workflow_dispatch:
     inputs:
       enable_geo_filter:
-        description: 'Enable Asia-only geo filter'
+        description: 'Enable geo filter (default: JP/KR/SG/MY/HK only)'
         required: false
-        default: 'false'
+        default: 'true'
         type: choice
         options:
           - 'true'
@@ -61,48 +61,40 @@ jobs:
           from concurrent.futures import ThreadPoolExecutor, as_completed
 
           TEST_URL = "http://connectivitycheck.platform.hicloud.com/generate_204"
-          TCP_TIMEOUT = 3
-          HTTP_TIMEOUT = 8
+          TCP_TIMEOUT = 2
+          HTTP_TIMEOUT = 6
           FETCH_TIMEOUT = 10
-          MAX_LATENCY_MS = 3000
+          MAX_LATENCY_MS = 2000
           VALID_STATUS = {200, 204, 301, 302, 403}
-          MAX_WORKERS = 50
-          TOP_N = 15
+          MAX_WORKERS = 30
+          TOP_N = 10
 
-          geo_input = os.environ.get("INPUT_ENABLE_GEO_FILTER", "false").lower().strip()
+          geo_input = os.environ.get("INPUT_ENABLE_GEO_FILTER", "true").lower().strip()
           ENABLE_GEO_FILTER = geo_input in ("true", "1", "yes", "on")
 
-          ASIA_CODES = {
-              "CN", "JP", "KR", "SG", "HK", "TW", "TH", "VN", "MY", "ID",
-              "PH", "IN", "KH", "LA", "MM", "MN", "PK", "BD", "NP", "LK",
-              "AE", "SA", "QA", "KW", "OM", "BH", "IL", "TR", "IR", "UZ",
-              "KZ", "KG", "TJ", "TM", "AZ", "AM", "GE"
-          }
+          # 只保留距离中国大陆最近的5个地区
+          TARGET_CODES = {"JP", "KR", "SG", "MY", "HK"}
 
+          # 精简代理源，只保留响应快、质量稳定的
           SOURCES = [
+              # HTTP - 优先亚洲源
               ("https://raw.githubusercontent.com/saisuiu/Lionkings-Http-Proxys-Proxies/main/cnfree.txt", "http", False),
               ("https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/MostStable/http.txt", "http", False),
               ("https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/Stable/http.txt", "http", False),
               ("https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt", "http", False),
               ("https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt", "http", False),
-              ("https://raw.githubusercontent.com/zevtyardt/proxy-list/main/http.txt", "http", False),
               ("https://raw.githubusercontent.com/officialputuid/KangProxy/KangProxy/http/http.txt", "http", False),
               ("https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt", "http", False),
-              ("https://raw.githubusercontent.com/Anonym0usWork1221/Free-Proxies/main/proxy_files/http_proxies.txt", "http", False),
               ("https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/http.txt", "http", False),
-              ("https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt", "http", False),
-              ("https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/proxy.txt", "http", False),
               ("https://api.proxyscrape.com/v2/?request=get&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all", "http", False),
+              # SOCKS5
               ("https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/MostStable/socks5.txt", "socks5", False),
               ("https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/Stable/socks5.txt", "socks5", False),
-              ("https://raw.githubusercontent.com/Thordata/awesome-free-proxy-list/main/proxies/socks5.txt", "socks5", False),
               ("https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt", "socks5", False),
               ("https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks5.txt", "socks5", False),
               ("https://raw.githubusercontent.com/officialputuid/KangProxy/KangProxy/socks5/socks5.txt", "socks5", False),
               ("https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt", "socks5", False),
-              ("https://raw.githubusercontent.com/Anonym0usWork1221/Free-Proxies/main/proxy_files/socks5_proxies.txt", "socks5", False),
               ("https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/socks5.txt", "socks5", False),
-              ("https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt", "socks5", False),
               ("https://api.proxyscrape.com/v2/?request=get&protocol=socks5&timeout=10000&country=all", "socks5", False),
           ]
 
@@ -187,7 +179,6 @@ jobs:
 
               seen = set()
               result = []
-              source_stats = {}
               for p in raw:
                   p_lower = p.lower()
                   if p_lower not in seen:
@@ -262,7 +253,7 @@ jobs:
                   if h:
                       ip_map[h] = ip_map.get(h, []) + [p]
               ips = list(ip_map.keys())
-              asia_ips = set()
+              target_ips = set()
               batch_size = 100
               log("[GEO] Querying {} unique IPs via ip-api.com...".format(len(ips)))
               for i in range(0, len(ips), batch_size):
@@ -278,8 +269,8 @@ jobs:
                           for item in r.json():
                               cc = item.get("countryCode", "")
                               query_ip = item.get("query")
-                              if query_ip and cc in ASIA_CODES:
-                                  asia_ips.add(query_ip)
+                              if query_ip and cc in TARGET_CODES:
+                                  target_ips.add(query_ip)
                       else:
                           log("[GEO_WARN] batch HTTP {}".format(r.status_code))
                   except Exception as e:
@@ -287,14 +278,17 @@ jobs:
                   if i + batch_size < len(ips):
                       time.sleep(2)
               result = []
-              for ip in asia_ips:
+              for ip in target_ips:
                   if ip in ip_map:
                       result.extend(ip_map[ip])
-              log("[GEO] Asia IPs kept: {} / {}".format(len(result), len(proxy_urls)))
+              log("[GEO] Target IPs kept ({}): {} / {}".format(", ".join(sorted(TARGET_CODES)), len(result), len(proxy_urls)
+              ))
               return result
 
           log("=" * 60)
-          log("[Config] Geo filter enabled: {}".format(ENABLE_GEO_FILTER))
+          log("[Config] Geo filter enabled: {} | Target regions: {}".format(
+              ENABLE_GEO_FILTER, ", ".join(sorted(TARGET_CODES))
+          ))
           log("=" * 60)
 
           log("[1/4] Fetching proxy sources...")
@@ -319,11 +313,11 @@ jobs:
           log("[2/4] Done in {:.1f}s - TCP passed: {} / {}".format(time.time() - t_start, len(tcp_alive), len(candidates)))
 
           if ENABLE_GEO_FILTER:
-              log("[3/4] Geo-filtering to Asia only...")
+              log("[3/4] Geo-filtering to target regions...")
               t_start = time.time()
-              asia_proxies = geo_check_batch(tcp_alive)
-              validate_pool = asia_proxies
-              log("[3/4] Done in {:.1f}s - Asia: {} / {}".format(time.time() - t_start, len(validate_pool), len(tcp_alive)))
+              target_proxies = geo_check_batch(tcp_alive)
+              validate_pool = target_proxies
+              log("[3/4] Done in {:.1f}s - Target: {} / {}".format(time.time() - t_start, len(validate_pool), len(tcp_alive)))
           else:
               log("[3/4] Geo-filter skipped, using all TCP-alive proxies...")
               validate_pool = tcp_alive
@@ -435,6 +429,7 @@ jobs:
           with open("output/proxy_list.txt", "w", encoding="utf-8") as f:
               f.write("# Generated: {}\n".format(time.strftime("%Y-%m-%d %H:%M:%S")))
               f.write("# Test URL: {}\n".format(TEST_URL))
+              f.write("# Target Regions: {}\n".format(", ".join(sorted(TARGET_CODES))))
               f.write("# Geo Filter: {} | TCP<{}s | HTTP<{}s | Latency<{}ms\n".format(
                   ENABLE_GEO_FILTER, TCP_TIMEOUT, HTTP_TIMEOUT, MAX_LATENCY_MS
               ))
@@ -463,8 +458,8 @@ jobs:
           status_text = "OK" if selected else "NO PROXY"
           html_parts.append('<p class="{}">Status: {}</p>'.format(status_class, status_text))
           html_parts.append('<p>Generated: {}</p>'.format(time.strftime("%Y-%m-%d %H:%M:%S")))
-          html_parts.append('<p>Geo Filter: <b>{}</b> | Fetched: {} | TCP: {} | Alive: {} | Selected: {}</p>'.format(
-              "ON" if ENABLE_GEO_FILTER else "OFF",
+          html_parts.append('<p>Target Regions: <b>{}</b> | Fetched: {} | TCP: {} | Alive: {} | Selected: {}</p>'.format(
+              ", ".join(sorted(TARGET_CODES)),
               len(candidates), len(tcp_alive), len(alive), len(selected)
           ))
           html_parts.extend([
@@ -511,7 +506,7 @@ jobs:
           log("=" * 60)
           PYEOF
         env:
-          INPUT_ENABLE_GEO_FILTER: ${{ github.event.inputs.enable_geo_filter || 'false' }}
+          INPUT_ENABLE_GEO_FILTER: ${{ github.event.inputs.enable_geo_filter || 'true' }}
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
