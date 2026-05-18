@@ -1,4 +1,4 @@
-name: Proxy Pool & PAC Generator
+name: Proxy Pool & PAC Generator (v2 - Geo Switch + More Sources)
 
 on:
   schedule:
@@ -16,6 +16,15 @@ on:
     - cron: '0 10 * * *'
     - cron: '0 11 * * *'
   workflow_dispatch:
+    inputs:
+      enable_geo_filter:
+        description: 'Enable Asia-only geo filter'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 permissions:
   contents: write
@@ -41,23 +50,28 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install requests PySocks
+        run: pip install requests
 
       - name: Fetch & Validate Proxies
         run: |
           mkdir -p output
           python3 << 'PYEOF'
-          import requests, socket, time, re, json, os
+          import requests, socket, time, re, json, os, sys
           from urllib.parse import urlparse
           from concurrent.futures import ThreadPoolExecutor, as_completed
 
+          # ========== 配置区 ==========
           TEST_URL = "http://connectivitycheck.platform.hicloud.com/generate_204"
-          TCP_TIMEOUT = 2
-          HTTP_TIMEOUT = 5
-          MAX_LATENCY_MS = 1000
-          VALID_STATUS = {200, 204, 301, 302}
-          MAX_WORKERS = 80
-          TOP_N = 20
+          TCP_TIMEOUT = 3
+          HTTP_TIMEOUT = 8
+          MAX_LATENCY_MS = 3000
+          VALID_STATUS = {200, 204, 301, 302, 403}
+          MAX_WORKERS = 100
+          TOP_N = 15
+
+          # 地理过滤开关：workflow_dispatch 传入，或默认 False
+          geo_input = os.environ.get("INPUT_ENABLE_GEO_FILTER", "false").lower().strip()
+          ENABLE_GEO_FILTER = geo_input in ("true", "1", "yes", "on")
 
           ASIA_CODES = {
               "CN", "JP", "KR", "SG", "HK", "TW", "TH", "VN", "MY", "ID",
@@ -66,71 +80,126 @@ jobs:
               "KZ", "KG", "TJ", "TM", "AZ", "AM", "GE"
           }
 
+          # ========== 代理源列表 ==========
+          # 格式: (URL, 协议推断关键词, 是否必需)
           SOURCES = [
-              "https://raw.githubusercontent.com/saisuiu/Lionkings-Http-Proxys-Proxies/main/cnfree.txt",
-              "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/MostStable/socks5.txt",
-              "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/Stable/socks5.txt",
-              "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/MostStable/http.txt",
-              "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/Stable/http.txt",
-              "https://raw.githubusercontent.com/Thordata/awesome-free-proxy-list/main/proxies/socks5.txt",
-              "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
+              # HTTP 代理源
+              ("https://raw.githubusercontent.com/saisuiu/Lionkings-Http-Proxys-Proxies/main/cnfree.txt", "http", False),
+              ("https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/MostStable/http.txt", "http", False),
+              ("https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/Stable/http.txt", "http", False),
+              ("https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt", "http", False),
+              ("https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt", "http", False),
+              ("https://raw.githubusercontent.com/zevtyardt/proxy-list/main/http.txt", "http", False),
+              ("https://raw.githubusercontent.com/officialputuid/KangProxy/KangProxy/http/http.txt", "http", False),
+              ("https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt", "http", False),
+              ("https://raw.githubusercontent.com/Anonym0usWork1221/Free-Proxies/main/proxy_files/http_proxies.txt", "http", False),
+              ("https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/http.txt", "http", False),
+              ("https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt", "http", False),
+              ("https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/proxies.txt", "http", False),
+              ("https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt", "http", False),
+              ("https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/proxy.txt", "http", False),
+              ("https://api.proxyscrape.com/v2/?request=get&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all", "http", False),
+              # SOCKS5 代理源
+              ("https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/MostStable/socks5.txt", "socks5", False),
+              ("https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/Stable/socks5.txt", "socks5", False),
+              ("https://raw.githubusercontent.com/Thordata/awesome-free-proxy-list/main/proxies/socks5.txt", "socks5", False),
+              ("https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt", "socks5", False),
+              ("https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks5.txt", "socks5", False),
+              ("https://raw.githubusercontent.com/officialputuid/KangProxy/KangProxy/socks5/socks5.txt", "socks5", False),
+              ("https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt", "socks5", False),
+              ("https://raw.githubusercontent.com/Anonym0usWork1221/Free-Proxies/main/proxy_files/socks5_proxies.txt", "socks5", False),
+              ("https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/socks5.txt", "socks5", False),
+              ("https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt", "socks5", False),
+              ("https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt", "socks5", False),
+              ("https://api.proxyscrape.com/v2/?request=get&protocol=socks5&timeout=10000&country=all", "socks5", False),
           ]
+
+          def log(msg):
+              print(msg)
+              sys.stdout.flush()
 
           def fetch_sources():
               raw = []
-              for url in SOURCES:
+              for url, default_proto, required in SOURCES:
                   try:
-                      r = requests.get(url, timeout=20)
+                      r = requests.get(url, timeout=25)
                       if r.status_code != 200:
-                          print("[SKIP] {} -> HTTP {}".format(url, r.status_code))
+                          level = "[ERR]" if required else "[SKIP]"
+                          log("{} {} -> HTTP {}".format(level, url, r.status_code))
                           continue
                       text = r.text.strip()
                       if not text:
                           continue
+
+                      protocol = default_proto
                       ct = r.headers.get("content-type", "")
+
                       if "json" in ct or text.startswith("[") or text.startswith("{"):
                           try:
                               data = json.loads(text)
                               if isinstance(data, list):
                                   for item in data:
                                       if isinstance(item, dict):
-                                          proto = item.get("protocol", "http")
+                                          proto = item.get("protocol", protocol)
                                           host = item.get("ip") or item.get("host")
                                           port = item.get("port")
                                           if host and port:
-                                              raw.append("{}://{}:{}".format(proto, host, port))
+                                              raw.append(("{}://{}:{}".format(proto, host, port), url))
                                       elif isinstance(item, str) and re.match(r"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+", item):
-                                          raw.append("http://{}".format(item))
+                                          raw.append(("http://{}".format(item), url))
                               elif isinstance(data, dict):
                                   for key in ["proxies", "data", "list"]:
                                       if key in data and isinstance(data[key], list):
                                           for p in data[key]:
                                               if isinstance(p, dict):
-                                                  proto = p.get("protocol", "http")
+                                                  proto = p.get("protocol", protocol)
                                                   host = p.get("ip") or p.get("host")
                                                   port = p.get("port")
                                                   if host and port:
-                                                      raw.append("{}://{}:{}".format(proto, host, port))
+                                                      raw.append(("{}://{}:{}".format(proto, host, port), url))
                           except Exception as e:
-                              print("[JSON_ERR] {}: {}".format(url, e))
+                              log("[JSON_ERR] {}: {}".format(url, e))
                       else:
-                          protocol = "http"
-                          if "socks5" in url.lower():
-                              protocol = "socks5"
-                          elif "socks4" in url.lower():
-                              protocol = "socks4"
+                          # 纯文本行格式解析
                           for line in text.splitlines():
                               line = line.strip()
+                              if not line or line.startswith("#"):
+                                  continue
+                              # 格式: ip:port
                               if re.match(r"^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}:[0-9]+$", line):
-                                  raw.append("{}://{}".format(protocol, line))
+                                  raw.append(("{}://{}".format(protocol, line), url))
+                              # 格式: ip:port:user:pass (只取前两项)
+                              elif re.match(r"^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}:[0-9]+:.+:.+$", line):
+                                  parts = line.split(":")
+                                  if len(parts) >= 4:
+                                      ip, port = parts[0], parts[1]
+                                      raw.append(("{}://{}:{}".format(protocol, ip, port), url))
+                              # 格式: protocol://ip:port
+                              elif re.match(r"^(http|socks4|socks5)://[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}:[0-9]+$", line):
+                                  raw.append((line, url))
+                              # 格式: ip:port (带额外空格/tab分隔字段)
+                              else:
+                                  m = re.match(r"^([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}):([0-9]+)", line)
+                                  if m:
+                                      raw.append(("{}://{}:{}".format(protocol, m.group(1), m.group(2)), url))
                   except Exception as e:
-                      print("[FETCH_ERR] {}: {}".format(url, e))
+                      level = "[FETCH_ERR]" if required else "[FETCH_SKIP]"
+                      log("{} {}: {}".format(level, url, e))
+
+              # 去重，保留来源信息用于调试
               seen = set()
               result = []
-              for p in raw:
-                  if p not in seen:
-                      seen.add(p)
+              source_stats = {}
+              for p, src in raw:
+                  p_lower = p.lower()
+                  if p_lower not in seen:
+                      seen.add(p_lower)
                       result.append(p)
+                      source_stats[src] = source_stats.get(src, 0) + 1
+
+              log("[FETCH] Source stats:")
+              for src, count in sorted(source_stats.items(), key=lambda x: -x[1])[:10]:
+                  log("        {} -> {} proxies".format(src.split("/")[-1], count))
               return result
 
           def tcp_check(host, port):
@@ -145,6 +214,55 @@ jobs:
               except Exception:
                   return False, 99999
 
+          def http_check(proxy_url):
+              try:
+                  proxies = {"http": proxy_url, "https": proxy_url}
+                  t0 = time.time()
+                  r = requests.get(TEST_URL, proxies=proxies, timeout=HTTP_TIMEOUT, allow_redirects=False)
+                  lat = (time.time() - t0) * 1000
+                  if r.status_code in VALID_STATUS and lat <= MAX_LATENCY_MS:
+                      return True, lat, r.status_code
+                  return False, lat, r.status_code
+              except Exception as e:
+                  return False, 99999, str(e)
+
+          def validate_one(proxy_url):
+              parsed = urlparse(proxy_url)
+              scheme = parsed.scheme if parsed.scheme else "http"
+              host, port = parsed.hostname, parsed.port
+              if not host or not port:
+                  return None
+
+              # SOCKS 代理只做 TCP 连通测试（requests+PySocks 兼容性差）
+              if scheme in ("socks5", "socks4"):
+                  ok, lat = tcp_check(host, port)
+                  if ok:
+                      return {
+                          "url": proxy_url,
+                          "scheme": scheme,
+                          "host": host,
+                          "port": port,
+                          "latency": round(lat, 2),
+                          "status": "TCP_OK"
+                      }
+                  return None
+
+              # HTTP/HTTPS 代理做完整验证
+              ok, _ = tcp_check(host, port)
+              if not ok:
+                  return None
+              ok, lat, status = http_check(proxy_url)
+              if ok:
+                  return {
+                      "url": proxy_url,
+                      "scheme": scheme,
+                      "host": host,
+                      "port": port,
+                      "latency": round(lat, 2),
+                      "status": status
+                  }
+              return None
+
           def geo_check_batch(proxy_urls):
               if not proxy_urls:
                   return []
@@ -156,7 +274,7 @@ jobs:
               ips = list(ip_map.keys())
               asia_ips = set()
               batch_size = 100
-              print("[GEO] Querying {} unique IPs via ip-api.com...".format(len(ips)))
+              log("[GEO] Querying {} unique IPs via ip-api.com...".format(len(ips)))
               for i in range(0, len(ips), batch_size):
                   batch = ips[i:i+batch_size]
                   payload = [{"query": ip, "fields": "countryCode"} for ip in batch]
@@ -173,56 +291,28 @@ jobs:
                               if query_ip and cc in ASIA_CODES:
                                   asia_ips.add(query_ip)
                       else:
-                          print("[GEO_WARN] batch HTTP {}".format(r.status_code))
+                          log("[GEO_WARN] batch HTTP {}".format(r.status_code))
                   except Exception as e:
-                      print("[GEO_ERR] {}".format(e))
+                      log("[GEO_ERR] {}".format(e))
                   if i + batch_size < len(ips):
                       time.sleep(2)
               result = []
               for ip in asia_ips:
                   if ip in ip_map:
                       result.extend(ip_map[ip])
-              print("[GEO] Asia IPs kept: {} / {}".format(len(result), len(proxy_urls)))
+              log("[GEO] Asia IPs kept: {} / {}".format(len(result), len(proxy_urls)))
               return result
 
-          def proxy_check(proxy_url):
-              try:
-                  proxies = {"http": proxy_url, "https": proxy_url}
-                  t0 = time.time()
-                  r = requests.get(TEST_URL, proxies=proxies, timeout=HTTP_TIMEOUT, allow_redirects=False)
-                  lat = (time.time() - t0) * 1000
-                  if r.status_code in VALID_STATUS and lat <= MAX_LATENCY_MS:
-                      return True, lat, r.status_code
-                  return False, lat, r.status_code
-              except Exception as e:
-                  return False, 99999, str(e)
+          # ========== 主流程 ==========
+          log("=" * 60)
+          log("[Config] Geo filter enabled: {}".format(ENABLE_GEO_FILTER))
+          log("=" * 60)
 
-          def validate_one(proxy_url):
-              parsed = urlparse(proxy_url)
-              host, port = parsed.hostname, parsed.port
-              if not host or not port:
-                  return None
-              ok, _ = tcp_check(host, port)
-              if not ok:
-                  return None
-              ok, lat, status = proxy_check(proxy_url)
-              if ok:
-                  return {
-                      "url": proxy_url,
-                      "scheme": parsed.scheme if parsed.scheme else "http",
-                      "host": host,
-                      "port": port,
-                      "latency": round(lat, 2),
-                      "status": status
-                  }
-              return None
-
-          print("=" * 60)
-          print("[1/5] Fetching proxy sources...")
+          log("[1/4] Fetching proxy sources...")
           candidates = fetch_sources()
-          print("      Total unique proxies fetched: {}".format(len(candidates)))
+          log("      Total unique proxies fetched: {}".format(len(candidates)))
 
-          print("[2/5] TCP connectivity check...")
+          log("[2/4] TCP connectivity check...")
           tcp_alive = []
           with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
               futures = {ex.submit(tcp_check, urlparse(p).hostname, urlparse(p).port): p for p in candidates}
@@ -231,30 +321,38 @@ jobs:
                   ok, lat = future.result()
                   if ok:
                       tcp_alive.append(p)
-          print("      TCP passed: {} / {}".format(len(tcp_alive), len(candidates)))
+          log("      TCP passed: {} / {}".format(len(tcp_alive), len(candidates)))
 
-          print("[3/5] Geo-filtering to Asia only...")
-          asia_proxies = geo_check_batch(tcp_alive)
+          # 地理过滤（可选开关）
+          if ENABLE_GEO_FILTER:
+              log("[3/4] Geo-filtering to Asia only...")
+              asia_proxies = geo_check_batch(tcp_alive)
+              validate_pool = asia_proxies
+              log("      Asia TCP passed: {} / {}".format(len(validate_pool), len(tcp_alive)))
+          else:
+              log("[3/4] Geo-filter skipped, using all TCP-alive proxies...")
+              validate_pool = tcp_alive
+              log("      Validate pool: {}".format(len(validate_pool)))
 
-          print("[4/5] Validating Asia proxies (HTTP)...")
+          log("[4/4] Validating proxies (HTTP + SOCKS TCP)...")
           alive = []
           dead = 0
           with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-              futures = {ex.submit(validate_one, p): p for p in asia_proxies}
+              futures = {ex.submit(validate_one, p): p for p in validate_pool}
               for future in as_completed(futures):
                   res = future.result()
                   if res:
                       alive.append(res)
-                      print("      ✓ ALIVE {} | {}ms | HTTP {}".format(res["url"], res["latency"], res["status"]))
+                      log("      ✓ ALIVE {} | {}ms | {}".format(res["url"], res["latency"], res["status"]))
                   else:
                       dead += 1
-
-          print("[5/5] Validation complete: {} alive / {} dead".format(len(alive), dead))
+          log("      Alive: {} / Dead: {}".format(len(alive), dead))
 
           alive.sort(key=lambda x: x["latency"])
           selected = alive[:TOP_N]
-          print("      Selected top {} proxies by latency".format(len(selected)))
+          log("      Selected top {} proxies by latency".format(len(selected)))
 
+          # ========== 生成PAC ==========
           proxy_directives = []
           for item in selected:
               scheme = item["scheme"]
@@ -268,10 +366,39 @@ jobs:
                   proxy_directives.append("PROXY {}:{}".format(host, port))
 
           proxy_chain = "; ".join(proxy_directives) + "; DIRECT" if proxy_directives else "DIRECT"
+          log("[PAC] Proxy chain: {}".format(proxy_chain[:200] + "..." if len(proxy_chain) > 200 else proxy_chain))
 
-          # 用单引号包裹 PAC 行，内部双引号无需转义
+          blocked_domains = [
+              "*.google.com", "*.googleapis.com", "*.googleusercontent.com",
+              "*.gstatic.com", "*.youtube.com", "*.ytimg.com", "*.ggpht.com",
+              "*.twitter.com", "*.x.com", "*.twimg.com",
+              "*.facebook.com", "*.fbcdn.net", "*.fb.com",
+              "*.instagram.com", "*.cdninstagram.com",
+              "*.wikipedia.org", "*.wikimedia.org",
+              "*.github.com", "*.githubusercontent.com", "*.githubassets.com",
+              "*.medium.com", "*.reddit.com", "*.redd.it",
+              "*.twitch.tv", "*.ttvnw.net",
+              "*.chatgpt.com", "*.openai.com", "*.oaistatic.com",
+              "*.claude.ai", "*.anthropic.com",
+              "*.gmail.com", "*.bbc.com", "*.bbc.co.uk",
+              "*.voachinese.com", "*.voa.gov",
+              "*.dropbox.com", "*.dropboxusercontent.com",
+              "*.archive.org", "*.cloudfront.net",
+              "*.tiktok.com", "*.tiktokv.com",
+              "*.telegram.org", "*.t.me",
+              "*.linkedin.com", "*.licdn.com",
+              "*.netflix.com", "*.nflxvideo.net",
+              "*.quora.com", "*.pinterest.com", "*.tumblr.com",
+              "*.soundcloud.com", "*.spotify.com",
+              "*.nytimes.com", "*.washingtonpost.com", "*.reuters.com",
+              "*.apnews.com", "*.dw.com", "*.rfa.org",
+              "*.chinadigitaltimes.net", "*.greatfire.org",
+              "*.signal.org", "*.wire.com"
+          ]
+
           pac_lines = [
               'function FindProxyForURL(url, host) {',
+              '    // 内网和中国域名直连',
               '    if (shExpMatch(host, "*.cn") ||',
               '        shExpMatch(host, "*.com.cn") ||',
               '        shExpMatch(host, "*.gov.cn") ||',
@@ -283,9 +410,25 @@ jobs:
               '        isPlainHostName(host)) {',
               '        return "DIRECT";',
               '    }',
-              '    return "' + proxy_chain + '";',
-              '}'
+              '',
+              '    // 被墙域名走代理',
+              '    var blocked = ['
           ]
+          for i, d in enumerate(blocked_domains):
+              comma = "," if i < len(blocked_domains) - 1 else ""
+              pac_lines.append('        "{}"{}'.format(d, comma))
+          pac_lines.extend([
+              '    ];',
+              '    for (var i = 0; i < blocked.length; i++) {',
+              '        if (shExpMatch(host, blocked[i])) {',
+              '            return "{}";'.format(proxy_chain),
+              '        }',
+              '    }',
+              '',
+              '    // 默认直连',
+              '    return "DIRECT";',
+              '}'
+          ])
           pac_content = "\n".join(pac_lines)
 
           os.makedirs("output", exist_ok=True)
@@ -295,22 +438,74 @@ jobs:
           with open("output/proxy_list.txt", "w", encoding="utf-8") as f:
               f.write("# Generated: {}\n".format(time.strftime("%Y-%m-%d %H:%M:%S")))
               f.write("# Test URL: {}\n".format(TEST_URL))
-              f.write("# Criteria: TCP<{}s, HTTP<{}s, Latency<{}ms, Asia only\n".format(TCP_TIMEOUT, HTTP_TIMEOUT, MAX_LATENCY_MS))
-              f.write("-" * 50 + "\n")
-              for item in selected:
-                  f.write("{} | {}ms | HTTP {}\n".format(item["url"], item["latency"], item["status"]))
+              f.write("# Geo Filter: {} | TCP<{}s | HTTP<{}s | Latency<{}ms\n".format(
+                  ENABLE_GEO_FILTER, TCP_TIMEOUT, HTTP_TIMEOUT, MAX_LATENCY_MS
+              ))
+              f.write("-" * 60 + "\n")
+              if selected:
+                  for item in selected:
+                      f.write("{} | {}ms | Status: {}\n".format(item["url"], item["latency"], item["status"]))
+              else:
+                  f.write("# WARNING: No usable proxies found. PAC returns DIRECT for all traffic.\n")
 
-          summary = "Fetched {}, TCP {}, Asia {}, Alive {}, Selected {}".format(
-              len(candidates), len(tcp_alive), len(asia_proxies), len(alive), len(selected)
+          # 生成 index.html 状态页
+          html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Proxy Pool Status</title>
+<style>
+body{font-family:monospace;max-width:900px;margin:40px auto;padding:20px}
+h1{border-bottom:2px solid #333}pre{background:#f4f4f4;padding:15px;overflow:auto}
+.ok{color:green}.warn{color:orange}.err{color:red}
+table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccc;padding:8px;text-align:left}
+th{background:#eee}
+</style></head>
+<body>
+<h1>Proxy Pool Status</h1>
+<p class="{status_class}">Status: {status}</p>
+<p>Generated: {time}</p>
+<p>Geo Filter: <b>{geo}</b> | Fetched: {fetched} | TCP: {tcp} | Alive: {alive} | Selected: {selected}</p>
+<h2>PAC URL</h2>
+<code>https://YOURNAME.github.io/REPO/proxy.pac</code>
+<h2>Selected Proxies</h2>
+<table>
+<tr><th>Proxy</th><th>Latency</th><th>Status</th></tr>
+{rows}
+</table>
+<h2>Raw List</h2>
+<pre>{raw}</pre>
+</body></html>
+""".format(
+              status="OK" if selected else "NO PROXY",
+              status_class="ok" if selected else "err",
+              time=time.strftime("%Y-%m-%d %H:%M:%S"),
+              geo="ON" if ENABLE_GEO_FILTER else "OFF",
+              fetched=len(candidates),
+              tcp=len(tcp_alive),
+              alive=len(alive),
+              selected=len(selected),
+              rows="\n".join([
+                  "<tr><td>{}</td><td>{}ms</td><td>{}</td></tr>".format(
+                      s["url"], s["latency"], s["status"]
+                  ) for s in selected
+              ]) if selected else "<tr><td colspan=3>No proxies</td></tr>",
+              raw="\n".join(["{} | {}ms | {}".format(s["url"], s["latency"], s["status"]) for s in selected])
+          )
+          with open("output/index.html", "w", encoding="utf-8") as f:
+              f.write(html)
+
+          summary = "Fetched {}, TCP {}, Alive {}, Selected {}".format(
+              len(candidates), len(tcp_alive), len(alive), len(selected)
           )
           gh_out = os.environ.get("GITHUB_OUTPUT", "/dev/null")
           with open(gh_out, "a") as fh:
               print("summary={}".format(summary), file=fh)
 
-          print("[DONE] {}".format(summary))
-          print("      Files written: output/proxy.pac , output/proxy_list.txt")
-          print("=" * 60)
+          log("[DONE] {}".format(summary))
+          log("      Files written: output/proxy.pac, output/proxy_list.txt, output/index.html")
+          log("=" * 60)
           PYEOF
+        env:
+          INPUT_ENABLE_GEO_FILTER: ${{ github.event.inputs.enable_geo_filter || 'false' }}
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
