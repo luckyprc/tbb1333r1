@@ -1,4 +1,4 @@
-name: Proxy Pool & PAC Generator (HTTP Only)
+name: Proxy Pool & PAC Generator (HTTP Only - Fixed)
 
 on:
   schedule:
@@ -74,7 +74,6 @@ jobs:
 
           TARGET_CODES = {"JP", "KR", "SG", "MY", "HK", "TW", "TH", "VN", "ID", "PH"}
 
-          # ========== 仅 HTTP 代理源（25+个）==========
           SOURCES = [
               ("https://raw.githubusercontent.com/saisuiu/Lionkings-Http-Proxys-Proxies/main/cnfree.txt", "http", False),
               ("https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/MostStable/http.txt", "http", False),
@@ -112,6 +111,25 @@ jobs:
               print("[{}] {}".format(ts, msg))
               sys.stdout.flush()
 
+          def is_valid_port(port):
+              try:
+                  p = int(port)
+                  return 1 <= p <= 65535
+              except (ValueError, TypeError):
+                  return False
+
+          def parse_proxy_url(proxy_str):
+              """安全解析代理URL，返回(host, port)或None"""
+              try:
+                  parsed = urlparse(proxy_str)
+                  host = parsed.hostname
+                  port = parsed.port
+                  if not host or not port or not is_valid_port(port):
+                      return None
+                  return host, port
+              except Exception:
+                  return None
+
           def fetch_one(url, default_proto):
               t0 = time.time()
               try:
@@ -138,7 +156,7 @@ jobs:
                                       proto = item.get("protocol", protocol)
                                       host = item.get("ip") or item.get("host")
                                       port = item.get("port")
-                                      if host and port:
+                                      if host and is_valid_port(port):
                                           raw.append("{}://{}:{}".format(proto, host, port))
                                   elif isinstance(item, str) and re.match(r"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+", item):
                                       raw.append("http://{}".format(item))
@@ -150,7 +168,7 @@ jobs:
                                               proto = p.get("protocol", protocol)
                                               host = p.get("ip") or p.get("host")
                                               port = p.get("port")
-                                              if host and port:
+                                              if host and is_valid_port(port):
                                                   raw.append("{}://{}:{}".format(proto, host, port))
                       except Exception as e:
                           log("[JSON_ERR] {}: {}".format(url.split("/")[-1], e))
@@ -165,13 +183,15 @@ jobs:
                               parts = line.split(":")
                               if len(parts) >= 4:
                                   ip, port = parts[0], parts[1]
-                                  raw.append("{}://{}:{}".format(protocol, ip, port))
+                                  if is_valid_port(port):
+                                      raw.append("{}://{}:{}".format(protocol, ip, port))
                           elif re.match(r"^(http|https)://[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}:[0-9]+$", line):
                               raw.append(line)
                           else:
                               m = re.match(r"^([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}):([0-9]+)", line)
                               if m:
-                                  raw.append("{}://{}:{}".format(protocol, m.group(1), m.group(2)))
+                                  if is_valid_port(m.group(2)):
+                                      raw.append("{}://{}:{}".format(protocol, m.group(1), m.group(2)))
 
                   log("[FETCH] {} -> {} proxies ({:.1f}s)".format(url.split("/")[-1], len(raw), elapsed))
                   return raw
@@ -209,16 +229,13 @@ jobs:
                   return False, 99999
 
           def http_check(proxy_url):
-              """HTTP代理验证：只要有HTTP响应（非407认证）且延迟合格即算活"""
               try:
                   proxies = {"http": proxy_url, "https": proxy_url}
                   t0 = time.time()
                   r = requests.get(TEST_URL, proxies=proxies, timeout=HTTP_TIMEOUT, allow_redirects=False)
                   lat = (time.time() - t0) * 1000
-                  # 407 = 需要认证，免费代理不可用
                   if r.status_code == 407:
                       return False, lat, 407
-                  # 只要有HTTP响应（任何状态码）且延迟合格，说明代理服务在运行
                   if lat <= MAX_LATENCY_MS:
                       return True, lat, r.status_code
                   return False, lat, r.status_code
@@ -226,23 +243,20 @@ jobs:
                   return False, 99999, str(e)
 
           def validate_one(proxy_url):
-              parsed = urlparse(proxy_url)
-              scheme = parsed.scheme if parsed.scheme else "http"
-              host, port = parsed.hostname, parsed.port
-              if not host or not port:
+              parsed = parse_proxy_url(proxy_url)
+              if not parsed:
                   return None
+              host, port = parsed
 
-              # 先测TCP
               ok, _ = tcp_check(host, port)
               if not ok:
                   return None
 
-              # HTTP完整验证
               ok, lat, status = http_check(proxy_url)
               if ok:
                   return {
                       "url": proxy_url,
-                      "scheme": scheme,
+                      "scheme": "http",
                       "host": host,
                       "port": port,
                       "latency": round(lat, 2),
@@ -255,9 +269,10 @@ jobs:
                   return []
               ip_map = {}
               for p in proxy_urls:
-                  h = urlparse(p).hostname
-                  if h:
-                      ip_map[h] = ip_map.get(h, []) + [p]
+                  parsed = parse_proxy_url(p)
+                  if parsed:
+                      host, _ = parsed
+                      ip_map[host] = ip_map.get(host, []) + [p]
               ips = list(ip_map.keys())
               target_ips = set()
               batch_size = 100
@@ -303,12 +318,30 @@ jobs:
           candidates = fetch_sources()
           log("[1/4] Done in {:.1f}s".format(time.time() - t_start))
 
+          # 过滤无效端口后再进入TCP阶段
+          valid_candidates = []
+          invalid_count = 0
+          for p in candidates:
+              if parse_proxy_url(p):
+                  valid_candidates.append(p)
+              else:
+                  invalid_count += 1
+          if invalid_count > 0:
+              log("[WARN] Filtered {} proxies with invalid ports".format(invalid_count))
+          candidates = valid_candidates
+          log("[1/4] Valid proxies after port check: {}".format(len(candidates)))
+
           log("[2/4] TCP connectivity check...")
           t_start = time.time()
           tcp_alive = []
           checked = 0
           with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-              futures = {ex.submit(tcp_check, urlparse(p).hostname, urlparse(p).port): p for p in candidates}
+              futures = {}
+              for p in candidates:
+                  parsed = parse_proxy_url(p)
+                  if parsed:
+                      host, port = parsed
+                      futures[ex.submit(tcp_check, host, port)] = p
               for future in as_completed(futures):
                   p = futures[future]
                   ok, lat = future.result()
